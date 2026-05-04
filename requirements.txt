@@ -1,0 +1,9 @@
+# ==== Cho máy phát triển (Windows/Linux) và Raspberry Pi 4 ====
+# Trên Pi 4 (Bookworm 64-bit) cài: sudo apt install python3-picamera2 python3-opencv
+# Sau đó dùng venv với --system-site-packages để dùng được picamera2.
+
+numpy>=1.23
+opencv-python>=4.8           # Trên Pi: dùng python3-opencv của apt thay vì gói này
+tensorflow>=2.13 ; platform_machine != "armv7l"
+# Trên Raspberry Pi OS 64-bit có thể cài: pip install tensorflow-aarch64
+# Hoặc nhẹ hơn: pip install tflite-runtime  (cần đổi sang dùng TFLite model)
