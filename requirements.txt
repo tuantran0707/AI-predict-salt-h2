@@ -1,11 +1,10 @@
-# For dev machine (Windows / Linux x86_64) and Raspberry Pi 4 (aarch64).
-# On Raspberry Pi OS Bookworm 64-bit, prefer the apt packages for camera/OpenCV:
-#     sudo apt install -y python3-picamera2 python3-opencv
-# then create the venv with --system-site-packages so picamera2 is available.
+# Works the same on Windows / Linux x86_64 and Raspberry Pi 4 (aarch64).
+#
+# Raspberry Pi 4 (Bookworm or Trixie):
+#   sudo apt install -y python3-picamera2 python3-opencv python3-numpy
+# Then create the venv with --system-site-packages OR just run with system python3.
+# No TensorFlow needed - inference runs through OpenCV DNN on the bundled
+# MobileNetV2 ONNX model in model/.
 
 numpy>=1.23
-opencv-python>=4.8           # On Pi: skip this and rely on apt python3-opencv
-tensorflow>=2.13 ; platform_machine == "x86_64"
-# On Raspberry Pi 4 (aarch64) install one of:
-#   pip install tensorflow-aarch64
-#   pip install tflite-runtime         # lighter, requires using a .tflite model
+opencv-python>=4.8       # On Pi: skip and rely on apt python3-opencv

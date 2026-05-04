@@ -2,7 +2,7 @@
 run_camera.py
 -------------
 Live salt / sulfate detection on a marine battery using the Raspberry Pi 4
-CSI camera.
+CSI camera (or any USB webcam on a development machine).
 
 On the Pi we use Picamera2 (libcamera) for the CSI port. On a development
 machine without picamera2 the script automatically falls back to OpenCV
@@ -106,10 +106,8 @@ def draw_overlay(frame: np.ndarray, result: dict, fps: float) -> np.ndarray:
     color = (0, 0, 255) if has_salt else (0, 200, 0)
     label = "SALT DETECTED" if has_salt else "CLEAN"
 
-    # Warning border
     cv2.rectangle(out, (0, 0), (w - 1, h - 1), color, 6)
 
-    # Info panel
     panel = np.zeros((110, w, 3), dtype=np.uint8)
     cv2.putText(panel, f"{label}  ({conf*100:.1f}%)",
                 (15, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
@@ -130,6 +128,8 @@ def draw_overlay(frame: np.ndarray, result: dict, fps: float) -> np.ndarray:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Salt detector on CSI camera.")
     p.add_argument("--prototypes", default="prototypes.npz")
+    p.add_argument("--model", default=os.path.join("model",
+                                                   "mobilenetv2-12.onnx"))
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=720)
     p.add_argument("--infer-every", type=int, default=5,
@@ -147,7 +147,8 @@ def main() -> None:
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
     print("[i] Loading model and prototypes...")
-    detector = SaltDetector(prototypes_path=args.prototypes)
+    detector = SaltDetector(prototypes_path=args.prototypes,
+                            model_path=args.model)
 
     cam = CsiCamera(width=args.width, height=args.height,
                     prefer_csi=not args.no_csi)

@@ -1,15 +1,16 @@
 """
 train.py
 --------
-Few-shot "training" for the salt detector.
+Few-shot "training" for the salt detector (no TensorFlow required).
 
 Reads two folders:
     dataset/salt/    -> battery terminals with salt / sulfate corrosion
     dataset/clean/   -> clean battery terminals (negative class)
 
 For each image we generate a few light augmentations (flip, gamma, white
-balance shift) and average their MobileNetV2 embeddings into a single
-L2-normalized prototype vector. All prototypes are saved to prototypes.npz.
+balance shift) and average their MobileNetV2 (ONNX) embeddings into a
+single L2-normalized prototype vector. All prototypes are saved to
+prototypes.npz.
 
 When you collect more real images on the ship, just drop them into the
 right subfolder of dataset/ and rerun this script.
@@ -61,7 +62,7 @@ def build_prototypes(folder: str, extractor: FeatureExtractor, label: str):
     paths = list_images(folder)
     if not paths:
         print(f"  [!] No images in '{folder}'.")
-        return np.zeros((0, 1280), dtype=np.float32), []
+        return np.zeros((0, 1000), dtype=np.float32), []
 
     embeddings: list[np.ndarray] = []
     names: list[str] = []
@@ -74,9 +75,10 @@ def build_prototypes(folder: str, extractor: FeatureExtractor, label: str):
         vecs = np.stack([extractor.embed(v) for v in variants])
         proto = vecs.mean(axis=0)
         proto /= (np.linalg.norm(proto) + 1e-9)
-        embeddings.append(proto)
+        embeddings.append(proto.astype(np.float32))
         names.append(os.path.basename(p))
-        print(f"  [+] [{label}] {os.path.basename(p)}  ({len(variants)} variants)")
+        print(f"  [+] [{label}] {os.path.basename(p)}  "
+              f"({len(variants)} variants)")
 
     return np.stack(embeddings).astype(np.float32), names
 
@@ -89,7 +91,7 @@ def main() -> None:
             f"Expected dataset layout:\n  {salt_dir}/\n  {clean_dir}/"
         )
 
-    print("[i] Loading MobileNetV2 (first run downloads ~14 MB of weights)...")
+    print("[i] Loading MobileNetV2 ONNX via OpenCV DNN...")
     extractor = FeatureExtractor()
 
     print("[i] Building prototypes for class 'salt'...")
@@ -101,7 +103,8 @@ def main() -> None:
     if len(salt_protos) == 0 or len(clean_protos) == 0:
         raise SystemExit("Both classes must contain at least one image.")
 
-    save_prototypes(OUT_PATH, salt_protos, clean_protos, salt_names, clean_names)
+    save_prototypes(OUT_PATH, salt_protos, clean_protos,
+                    salt_names, clean_names)
     print(f"[OK] Saved {len(salt_protos)} salt + {len(clean_protos)} clean "
           f"prototypes to {OUT_PATH}")
 

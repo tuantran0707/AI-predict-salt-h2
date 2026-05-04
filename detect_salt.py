@@ -1,68 +1,72 @@
 """
 detect_salt.py
 --------------
-Core detector for salt / sulfate corrosion on marine battery terminals.
+Salt / sulfate corrosion detector for marine batteries.
 
-Strategy (few-shot, because we only have a handful of samples):
-  1) Use MobileNetV2 (ImageNet pretrained, classification head removed)
-     as a frozen feature extractor that outputs a 1280-D vector.
-  2) Build per-class prototypes:
-        - "salt"  : mean embedding of salty / corroded battery samples
+Few-shot pipeline that runs everywhere OpenCV runs (no TensorFlow):
+  1) MobileNetV2 (ImageNet pretrained, ONNX) is loaded via cv2.dnn.
+     Its 1000-D logit vector is used as an image embedding.
+  2) Per-class prototypes are pre-computed by train.py:
+        - "salt"  : mean embedding of corroded battery samples
         - "clean" : mean embedding of clean battery samples
-  3) At inference time, embed the camera frame and compare to both
-     prototype banks via cosine similarity. The class with the higher
-     similarity wins; the margin is mapped to a confidence score.
-  4) A classical HSV mask (white crystals + cyan/green sulfate +
-     yellow/brown crust) provides an independent corroboration signal
-     that is fused with the AI score.
+  3) At inference time the camera frame is embedded once and compared
+     against both banks via cosine similarity. The class with the higher
+     similarity wins; the margin is mapped to a confidence value.
+  4) An independent HSV color mask (white crystals + cyan/green sulfate +
+     yellow/brown crust) is fused in to corroborate the AI signal.
 """
 
 from __future__ import annotations
 
 import os
-import numpy as np
+
 import cv2
+import numpy as np
 
+IMG_SIZE = 224
+MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)   # ImageNet
+STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-# Lazy import so this module can be imported even without TensorFlow installed.
-def _load_tf():
-    import tensorflow as tf  # noqa: F401
-    from tensorflow.keras.applications.mobilenet_v2 import (
-        MobileNetV2, preprocess_input,
-    )
-    return MobileNetV2, preprocess_input
-
-
-IMG_SIZE = 224  # MobileNetV2 input size
+DEFAULT_MODEL = os.path.join("model", "mobilenetv2-12.onnx")
 
 
 # ---------------------------------------------------------------------------
-# Feature extractor
+# Feature extractor (OpenCV DNN + MobileNetV2 ONNX)
 # ---------------------------------------------------------------------------
 class FeatureExtractor:
-    """Wraps MobileNetV2 (include_top=False) with global average pooling."""
+    """MobileNetV2 ONNX wrapped in cv2.dnn.
 
-    def __init__(self):
-        MobileNetV2, preprocess_input = _load_tf()
-        base = MobileNetV2(
-            input_shape=(IMG_SIZE, IMG_SIZE, 3),
-            include_top=False,
-            weights="imagenet",
-            pooling="avg",
-        )
-        base.trainable = False
-        self.model = base
-        self.preprocess = preprocess_input
+    Returns an L2-normalized 1000-D logit vector per image. Logits work
+    fine as embeddings for cosine-similarity-based few-shot classification.
+    """
+
+    def __init__(self, model_path: str = DEFAULT_MODEL):
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"ONNX model not found at: {model_path}. "
+                "Download mobilenetv2-12.onnx from the ONNX model zoo."
+            )
+        self.net = cv2.dnn.readNetFromONNX(model_path)
+        # cv2.dnn picks the best available CPU backend automatically.
+        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+
+    def _preprocess(self, bgr_image: np.ndarray) -> np.ndarray:
+        rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+        rgb = cv2.resize(rgb, (IMG_SIZE, IMG_SIZE),
+                         interpolation=cv2.INTER_AREA)
+        x = rgb.astype(np.float32) / 255.0
+        x = (x - MEAN) / STD
+        # NCHW
+        x = np.transpose(x, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
+        return x
 
     def embed(self, bgr_image: np.ndarray) -> np.ndarray:
-        """Take a single BGR image (OpenCV) and return an L2-normalized vector."""
-        rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-        rgb = cv2.resize(rgb, (IMG_SIZE, IMG_SIZE))
-        x = self.preprocess(rgb.astype(np.float32))
-        x = np.expand_dims(x, axis=0)
-        feat = self.model.predict(x, verbose=0)[0]
-        n = np.linalg.norm(feat) + 1e-9
-        return feat / n
+        blob = self._preprocess(bgr_image)
+        self.net.setInput(blob)
+        feat = self.net.forward().flatten()
+        n = float(np.linalg.norm(feat)) + 1e-9
+        return (feat / n).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +100,9 @@ def load_prototypes(path: str):
 # Classical CV signal: ratio of pixels that look like salt / sulfate
 # ---------------------------------------------------------------------------
 def salt_color_ratio(bgr_image: np.ndarray) -> float:
-    """
-    Returns a value in [0, 1]: fraction of pixels whose color matches the
-    typical look of salt or battery sulfate corrosion. Combines:
+    """Returns a value in [0, 1]: fraction of pixels matching salt or
+    battery sulfate corrosion colors:
+
       - White / light grey crystals  (low S, high V)
       - Cyan-green copper sulfate    (battery terminal corrosion)
       - Yellow / brown sulfate crust
@@ -118,12 +122,12 @@ def salt_color_ratio(bgr_image: np.ndarray) -> float:
 # Combined detector
 # ---------------------------------------------------------------------------
 class SaltDetector:
-    """
-    Two-class nearest-prototype classifier with CV-based corroboration.
+    """Two-class nearest-prototype classifier with CV-based corroboration.
 
     Parameters
     ----------
-    prototypes_path : path to the .npz file produced by train.py
+    prototypes_path : .npz produced by train.py
+    model_path      : MobileNetV2 ONNX file
     margin_threshold : minimum (salt_sim - clean_sim) to flag salt purely
                        from the AI signal
     cv_threshold : minimum HSV mask ratio that on its own raises suspicion
@@ -132,6 +136,7 @@ class SaltDetector:
 
     def __init__(self,
                  prototypes_path: str = "prototypes.npz",
+                 model_path: str = DEFAULT_MODEL,
                  margin_threshold: float = 0.03,
                  cv_threshold: float = 0.08,
                  fusion_weight_ai: float = 0.7):
@@ -149,7 +154,7 @@ class SaltDetector:
         if len(self.clean_protos) == 0:
             raise ValueError("No 'clean' prototypes found.")
 
-        self.extractor = FeatureExtractor()
+        self.extractor = FeatureExtractor(model_path)
         self.margin_threshold = margin_threshold
         self.cv_threshold = cv_threshold
         self.w_ai = fusion_weight_ai
