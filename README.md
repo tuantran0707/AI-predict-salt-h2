@@ -1,72 +1,109 @@
-# AI nhận diện muối bám trên thùng acquy (Raspberry Pi 4 + CSI camera)
+# Salt / sulfate corrosion detector for marine batteries (Raspberry Pi 4 + CSI camera)
 
-Phát hiện muối / cặn sulfat bám trên cực và thùng acquy của tàu biển bằng
-camera CSI gắn trực tiếp vào Pi 4. Vì hiện chỉ có **5 ảnh mẫu** nên dùng
-**few-shot learning**:
+Detects salt and sulfate corrosion on battery terminals and casings on
+board ships using a Raspberry Pi 4 with a CSI camera. Because the
+training set is tiny (a handful of close-ups of corroded terminals plus a
+handful of clean battery shots) the detector uses **few-shot learning**
+instead of training a CNN from scratch:
 
-1. `train.py` dùng MobileNetV2 (pretrained ImageNet) trích đặc trưng cho
-   5 ảnh trong `images/` (kèm augment nhẹ) và lưu thành `prototypes.npz`.
-2. `run_camera.py` đọc frame từ CSI camera, tính embedding của frame, so
-   sánh cosine similarity với 5 prototype + kiểm tra mask màu (HSV) đặc
-   trưng của muối/sulfat → cho ra cảnh báo `CÓ MUỐI` / `SẠCH`.
+1. `train.py` runs every image in `dataset/salt/` and `dataset/clean/`
+   through MobileNetV2 (pretrained on ImageNet) with light augmentations
+   and stores one mean L2-normalized embedding per image into
+   `prototypes.npz`.
+2. `run_camera.py` reads frames from the CSI camera, embeds each frame
+   and compares it against both prototype banks via cosine similarity.
+   The class with the higher similarity wins; an HSV color mask
+   (white crystals / cyan-green copper sulfate / yellow crust) is fused
+   in as an independent corroboration signal.
 
-## Cấu trúc
+## Project layout
 
 ```
 AI-predict-salt-h2/
-├── images/              # 5 ảnh mẫu salt_01..salt_05.jpg
-├── train.py             # build prototypes.npz
-├── detect_salt.py       # FeatureExtractor + SaltDetector
-├── run_camera.py        # vòng lặp camera CSI + UI
+├── dataset/
+│   ├── salt/      # battery terminals with salt / sulfate corrosion
+│   └── clean/     # clean battery terminals (negative samples)
+├── detect_salt.py # FeatureExtractor + SaltDetector
+├── train.py       # builds prototypes.npz from dataset/
+├── run_camera.py  # CSI camera loop + UI overlay (with headless mode)
 ├── requirements.txt
 └── README.md
 ```
 
-## Cài đặt trên máy phát triển (Windows / Linux)
+## Install on a development machine (Windows / Linux x86_64)
 
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate     # Windows
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python train.py            # tạo prototypes.npz
-python run_camera.py       # test bằng webcam USB
+python train.py            # builds prototypes.npz
+python run_camera.py       # tests with the default USB webcam
 ```
 
-## Cài đặt trên Raspberry Pi 4 (Bookworm 64-bit)
+## Install on Raspberry Pi 4 (Raspberry Pi OS Bookworm 64-bit)
+
+Enable the CSI camera first:
+
+```bash
+sudo raspi-config           # Interface Options -> Camera -> Enable, then reboot
+libcamera-hello -t 2000     # sanity check the camera
+```
+
+Install system packages and create a venv that can see them:
 
 ```bash
 sudo apt update
 sudo apt install -y python3-picamera2 python3-opencv python3-pip python3-venv
 
-# Tạo venv kế thừa picamera2 từ hệ thống
+cd ~/AI-predict-salt-h2
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 
-# TensorFlow cho aarch64
+pip install --upgrade pip
 pip install numpy
-pip install tensorflow-aarch64        # hoặc: pip install tflite-runtime
+pip install tensorflow-aarch64    # full TF for aarch64
+# (or, if RAM is tight: pip install tflite-runtime — would require
+#  exporting MobileNetV2 to TFLite and adapting FeatureExtractor.)
 
-# Copy project sang Pi rồi:
 python train.py
-python run_camera.py
+python run_camera.py                    # GUI mode (needs an X server)
+# Headless variants:
+python run_camera.py --headless         # CSI camera, no GUI
+python run_camera.py --headless --no-csi --width 640 --height 480   # USB cam
 ```
 
-> Bật camera CSI: `sudo raspi-config` → Interface Options → Camera → Enable
-> rồi reboot. Kiểm tra: `libcamera-hello -t 2000`.
+### Performance tips for Pi 4
 
-## Tinh chỉnh ngưỡng
+- Inference runs every 5 frames by default (`--infer-every 5`) so the
+  preview stays smooth. Increase to 10 if CPU is saturated.
+- Lower the capture resolution if needed: `--width 640 --height 480`.
+- For best throughput, switch to a TFLite model (MobileNetV2 quantized
+  to int8 runs at ~30–50 ms/frame on a Pi 4 with `tflite-runtime`).
+- Make sure the Pi has good cooling — sustained TF inference will
+  thermal-throttle a fanless Pi 4.
 
-Trong `detect_salt.py`, lớp `SaltDetector`:
+## Tuning thresholds
 
-| Tham số | Mặc định | Ý nghĩa |
+Edit `SaltDetector(...)` in `run_camera.py` or in your own script:
+
+| Parameter | Default | Meaning |
 |---|---|---|
-| `ai_threshold` | 0.55 | Cosine similarity tối thiểu để coi là khớp mẫu |
-| `cv_threshold` | 0.08 | Tỉ lệ pixel "muối" tối thiểu trong khung hình |
-| `fusion_weight_ai` | 0.7 | Trọng số AI khi hợp nhất với CV |
+| `margin_threshold` | 0.03 | Minimum (salt_sim − clean_sim) to flag salt from AI alone |
+| `cv_threshold` | 0.08 | Minimum HSV salt-mask ratio that on its own raises suspicion |
+| `fusion_weight_ai` | 0.7 | Weight of the AI score when fusing with the CV score |
 
-Khi thu thêm ảnh thật trên tàu, bỏ vào `images/` rồi chạy lại `python train.py`.
-Càng nhiều mẫu, prototype càng đại diện và độ chính xác càng tăng.
+When you collect more real images on the ship, drop them into the
+appropriate `dataset/salt/` or `dataset/clean/` folder and rerun
+`python train.py`. No code changes required.
 
-## Phím trong cửa sổ camera
-- `q` — thoát
-- `s` — lưu snapshot vào `snapshots/`
+## Hotkeys (GUI mode)
+
+- `q` — quit
+- `s` — save a snapshot to `snapshots/`
+
+## Headless mode
+
+`python run_camera.py --headless` runs without any window. Frames where
+salt is detected are auto-saved to `snapshots/` (rate-limited to one
+every 5 seconds) and printed to stdout — handy when running the Pi as a
+background monitor with `systemd` or `tmux`.

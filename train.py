@@ -1,11 +1,18 @@
 """
 train.py
 --------
-"Train" few-shot trên 5 mẫu muối: trích feature MobileNetV2 cho từng ảnh
-trong thư mục images/ và lưu thành prototypes.npz.
+Few-shot "training" for the salt detector.
 
-Có làm augmentation nhẹ (flip + thay đổi sáng) để mỗi ảnh gốc tạo ra vài
-biến thể, giúp prototype bền hơn với điều kiện ánh sáng trên tàu biển.
+Reads two folders:
+    dataset/salt/    -> battery terminals with salt / sulfate corrosion
+    dataset/clean/   -> clean battery terminals (negative class)
+
+For each image we generate a few light augmentations (flip, gamma, white
+balance shift) and average their MobileNetV2 embeddings into a single
+L2-normalized prototype vector. All prototypes are saved to prototypes.npz.
+
+When you collect more real images on the ship, just drop them into the
+right subfolder of dataset/ and rerun this script.
 """
 
 from __future__ import annotations
@@ -18,69 +25,85 @@ import numpy as np
 
 from detect_salt import FeatureExtractor, save_prototypes
 
-IMAGES_DIR = "images"
+DATASET_DIR = "dataset"
 OUT_PATH = "prototypes.npz"
+EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
+
+
+def list_images(folder: str) -> list[str]:
+    paths: list[str] = []
+    for ext in EXTS:
+        paths.extend(glob.glob(os.path.join(folder, ext)))
+    return sorted(paths)
 
 
 def augment(bgr: np.ndarray) -> list[np.ndarray]:
-    """Sinh thêm biến thể đơn giản cho ảnh gốc."""
-    out = [bgr]
+    """Generate a few light variants of the input image."""
+    out = [bgr, cv2.flip(bgr, 1)]
 
-    # Lật ngang
-    out.append(cv2.flip(bgr, 1))
-
-    # Thay đổi độ sáng
+    # Brightness / gamma
     for gamma in (0.7, 1.3):
         lut = np.array(
             [((i / 255.0) ** (1.0 / gamma)) * 255 for i in range(256)]
         ).astype("uint8")
         out.append(cv2.LUT(bgr, lut))
 
-    # Thay đổi cân bằng trắng nhẹ (mô phỏng đèn vàng/đèn trắng)
+    # Mild warm white-balance shift (yellow shipboard lighting)
     warm = bgr.copy().astype(np.int16)
-    warm[..., 0] = np.clip(warm[..., 0] - 15, 0, 255)   # bớt blue
-    warm[..., 2] = np.clip(warm[..., 2] + 15, 0, 255)   # tăng red
+    warm[..., 0] = np.clip(warm[..., 0] - 15, 0, 255)   # less blue
+    warm[..., 2] = np.clip(warm[..., 2] + 15, 0, 255)   # more red
     out.append(warm.astype(np.uint8))
 
     return out
 
 
-def main() -> None:
-    paths = sorted(
-        glob.glob(os.path.join(IMAGES_DIR, "*.jpg"))
-        + glob.glob(os.path.join(IMAGES_DIR, "*.png"))
-        + glob.glob(os.path.join(IMAGES_DIR, "*.jpeg"))
-    )
+def build_prototypes(folder: str, extractor: FeatureExtractor, label: str):
+    paths = list_images(folder)
     if not paths:
-        raise SystemExit(f"Không có ảnh trong '{IMAGES_DIR}/'.")
-
-    print(f"[i] Tìm thấy {len(paths)} ảnh mẫu.")
-    print("[i] Tải MobileNetV2 (lần đầu sẽ download ~14MB weights)...")
-    extractor = FeatureExtractor()
+        print(f"  [!] No images in '{folder}'.")
+        return np.zeros((0, 1280), dtype=np.float32), []
 
     embeddings: list[np.ndarray] = []
     names: list[str] = []
-
     for p in paths:
         img = cv2.imread(p)
         if img is None:
-            print(f"  [!] Bỏ qua {p} (không đọc được).")
+            print(f"  [!] Skipped {p} (could not read).")
             continue
-
         variants = augment(img)
-        # Lấy trung bình embedding của các biến thể -> 1 prototype/ảnh
         vecs = np.stack([extractor.embed(v) for v in variants])
         proto = vecs.mean(axis=0)
         proto /= (np.linalg.norm(proto) + 1e-9)
-
         embeddings.append(proto)
         names.append(os.path.basename(p))
-        print(f"  [+] {os.path.basename(p)}: OK ({len(variants)} biến thể)")
+        print(f"  [+] [{label}] {os.path.basename(p)}  ({len(variants)} variants)")
 
-    prototypes = np.stack(embeddings).astype(np.float32)
-    save_prototypes(OUT_PATH, prototypes, names)
-    print(f"[✓] Lưu {prototypes.shape[0]} prototype vào {OUT_PATH} "
-          f"(shape={prototypes.shape})")
+    return np.stack(embeddings).astype(np.float32), names
+
+
+def main() -> None:
+    salt_dir = os.path.join(DATASET_DIR, "salt")
+    clean_dir = os.path.join(DATASET_DIR, "clean")
+    if not (os.path.isdir(salt_dir) and os.path.isdir(clean_dir)):
+        raise SystemExit(
+            f"Expected dataset layout:\n  {salt_dir}/\n  {clean_dir}/"
+        )
+
+    print("[i] Loading MobileNetV2 (first run downloads ~14 MB of weights)...")
+    extractor = FeatureExtractor()
+
+    print("[i] Building prototypes for class 'salt'...")
+    salt_protos, salt_names = build_prototypes(salt_dir, extractor, "salt")
+
+    print("[i] Building prototypes for class 'clean'...")
+    clean_protos, clean_names = build_prototypes(clean_dir, extractor, "clean")
+
+    if len(salt_protos) == 0 or len(clean_protos) == 0:
+        raise SystemExit("Both classes must contain at least one image.")
+
+    save_prototypes(OUT_PATH, salt_protos, clean_protos, salt_names, clean_names)
+    print(f"[OK] Saved {len(salt_protos)} salt + {len(clean_protos)} clean "
+          f"prototypes to {OUT_PATH}")
 
 
 if __name__ == "__main__":
