@@ -108,6 +108,17 @@ def draw_overlay(frame: np.ndarray, result: dict, fps: float) -> np.ndarray:
 
     cv2.rectangle(out, (0, 0), (w - 1, h - 1), color, 6)
 
+    # Bounding boxes around suspected salt regions
+    for box in result.get("boxes", []):
+        x, y, bw, bh, area_ratio = box
+        cv2.rectangle(out, (x, y), (x + bw, y + bh), (0, 0, 255), 2)
+        tag = f"salt {area_ratio*100:.1f}%"
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        ty = max(0, y - 6)
+        cv2.rectangle(out, (x, ty - th - 4), (x + tw + 6, ty), (0, 0, 255), -1)
+        cv2.putText(out, tag, (x + 3, ty - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
     panel = np.zeros((110, w, 3), dtype=np.uint8)
     cv2.putText(panel, f"{label}  ({conf*100:.1f}%)",
                 (15, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)

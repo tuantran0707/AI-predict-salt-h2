@@ -118,6 +118,44 @@ def salt_color_ratio(bgr_image: np.ndarray) -> float:
     return float(salt_mask.mean())
 
 
+def salt_mask(bgr_image: np.ndarray) -> np.ndarray:
+    """Binary mask (uint8 0/255) of pixels likely to be salt / sulfate."""
+    hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
+    H, S, V = cv2.split(hsv)
+    white_mask = (S < 60) & (V > 150)
+    cyan_mask = (H > 70) & (H < 110) & (S > 40) & (V > 120)
+    yellow_mask = (H > 15) & (H < 35) & (S > 40) & (V > 120)
+    m = (white_mask | cyan_mask | yellow_mask).astype(np.uint8) * 255
+    # Clean up noise and merge nearby crystals
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel, iterations=1)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel, iterations=2)
+    return m
+
+
+def salt_boxes(bgr_image: np.ndarray,
+               min_area_ratio: float = 0.002,
+               max_boxes: int = 8) -> list:
+    """Return bounding boxes around suspected salt regions.
+
+    Each box is (x, y, w, h, area_ratio). `area_ratio` is the share of the
+    image covered by that blob, useful for ranking and labeling.
+    """
+    h, w = bgr_image.shape[:2]
+    img_area = float(h * w)
+    mask = salt_mask(bgr_image)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = []
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area / img_area < min_area_ratio:
+            continue
+        x, y, bw, bh = cv2.boundingRect(c)
+        boxes.append((x, y, bw, bh, area / img_area))
+    boxes.sort(key=lambda b: b[4], reverse=True)
+    return boxes[:max_boxes]
+
+
 # ---------------------------------------------------------------------------
 # Combined detector
 # ---------------------------------------------------------------------------
@@ -182,6 +220,8 @@ class SaltDetector:
         has_salt = (margin >= self.margin_threshold) or \
                    (cv_score_raw >= self.cv_threshold and margin >= -0.02)
 
+        boxes = salt_boxes(bgr_image) if has_salt else []
+
         return {
             "has_salt": bool(has_salt),
             "confidence": float(np.clip(fused, 0.0, 1.0)),
@@ -191,4 +231,5 @@ class SaltDetector:
             "cv_ratio": cv_score_raw,
             "best_salt_match": best_salt,
             "best_clean_match": best_clean,
+            "boxes": boxes,
         }
