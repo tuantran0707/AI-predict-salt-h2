@@ -221,6 +221,114 @@ confidence = 0.7 * ai_score + 0.3 * cv_score
 - **Combined**: AI provides context ("this is a battery terminal"), CV
   provides physical evidence ("there are salt-colored pixels")
 
+### 8.1 Where does the formula `margin = salt_sim − clean_sim` come from?
+
+This is **not** an ad-hoc formula — it is the explicit form of the
+**Nearest-Prototype decision rule** used in few-shot learning
+(Snell et al., *Prototypical Networks for Few-shot Learning*, NeurIPS
+2017, https://arxiv.org/abs/1703.05175).
+
+**Step-by-step derivation:**
+
+1. `train.py` computes one prototype per class as the mean of the
+   L2-normalized embeddings of all augmented samples:
+
+   $$\mathbf{p}_{\text{salt}} = \frac{1}{N_s}\sum_{i=1}^{N_s} \mathbf{e}_i^{\text{salt}}, \quad
+     \mathbf{p}_{\text{clean}} = \frac{1}{N_c}\sum_{j=1}^{N_c} \mathbf{e}_j^{\text{clean}}$$
+
+2. At inference, the query image is embedded into vector $\mathbf{e}$ and
+   L2-normalized (`detect_salt.py`, `FeatureExtractor.embed`). Because
+   both prototypes and query are unit vectors, the dot product **is**
+   the cosine similarity:
+
+   $$\text{sim}(\mathbf{p}, \mathbf{e}) = \mathbf{p}\cdot\mathbf{e} = \cos(\theta) \in [-1, 1]$$
+
+3. The Prototypical-Network decision rule is *"assign the query to the
+   class of the nearest prototype"*. With cosine distance this means
+   **pick the class with the higher similarity**:
+
+   $$\hat{y} = \arg\max_{c \in \{\text{salt},\,\text{clean}\}} \text{sim}(\mathbf{p}_c, \mathbf{e})$$
+
+4. For a 2-class problem this `argmax` is equivalent to checking the
+   sign of the **difference** of the two similarities. That difference
+   is exactly our `margin`:
+
+   $$\text{margin} \;=\; \text{salt\_sim} - \text{clean\_sim}
+   \begin{cases}
+   > 0 & \Rightarrow\ \text{predict salt} \\
+   < 0 & \Rightarrow\ \text{predict clean} \\
+   = 0 & \Rightarrow\ \text{on the decision boundary}
+   \end{cases}$$
+
+   The **magnitude** $|\text{margin}|$ is the distance from the decision
+   boundary, i.e. how confident the classifier is. This "margin" concept
+   is identical in spirit to the SVM margin (Cortes & Vapnik, 1995) and
+   to the logit difference used in binary softmax classifiers.
+
+5. **Why the *difference* and not just `salt_sim` alone?**
+   Absolute cosine values drift with image quality: dark, blurry, or
+   out-of-distribution frames push *both* similarities down together.
+   Subtracting `clean_sim` cancels this common-mode bias and leaves only
+   the **relative** evidence ("does the frame look more like salt than
+   like clean?"). This is the same trick used in contrastive losses and
+   in log-likelihood-ratio tests (Neyman–Pearson lemma).
+
+### 8.2 What is `ai_score` and what does it represent?
+
+`ai_score` is **not** a classification result. It is the AI branch's
+**confidence**, rescaled into `[0, 1]` so it can be linearly fused with
+the CV branch's score (which is also in `[0, 1]`).
+
+```python
+# detect_salt.py, SaltDetector.predict()
+ai_score = float(np.clip((margin + 0.1) / 0.3, 0.0, 1.0))
+```
+
+**Interpretation of the values:**
+
+| `margin` | `ai_score` | Meaning |
+|---:|---:|---|
+| ≤ −0.10 | 0.00 | AI is very confident: **clean** |
+| −0.05 | 0.17 | AI leans clean |
+|  0.00 | 0.33 | Undecided (on the boundary) |
+| +0.05 | 0.50 | AI mildly leans salt |
+| +0.10 | 0.67 | AI leans salt |
+| ≥ +0.20 | 1.00 | AI is very confident: **salt** |
+
+**Where do the constants `0.1` and `0.3` come from?**
+They are an **affine rescaling** (a heuristic, not a theorem):
+
+$$\text{ai\_score} = \mathrm{clip}\!\left(\frac{\text{margin} - m_{\min}}{m_{\max} - m_{\min}},\ 0,\ 1\right)
+\quad\text{with}\quad m_{\min} = -0.1,\ m_{\max} = +0.2$$
+
+Empirically, with MobileNetV2 logits as embeddings on this dataset,
+margins fall in roughly `[-0.1, +0.2]` (see §14, "Mean margin"). Mapping
+that empirical range to `[0, 1]` gives every value the same scale as
+`cv_score`, which is required for the linear fusion:
+
+```
+confidence = 0.7 * ai_score + 0.3 * cv_score
+```
+
+If you change the backbone or the dataset, the empirical margin range
+will change and these constants should be re-tuned (see §15).
+
+### 8.3 Summary of the signal chain
+
+```
+embedding e  ──► salt_sim, clean_sim   (cosine vs prototypes)
+                     │
+                     ▼
+              margin = salt_sim − clean_sim     ← decision rule
+                     │
+                     ▼
+              ai_score ∈ [0,1]                  ← rescaled margin
+                     │
+                     ├── fused with cv_score → confidence (displayed)
+                     │
+                     └── thresholded (margin ≥ 0.03) → has_salt (boolean)
+```
+
 ---
 
 ## 9. Augmentation Pipeline
