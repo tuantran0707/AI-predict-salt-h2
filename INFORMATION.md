@@ -35,8 +35,8 @@
 and casings inside the battery rooms of marine vessels, using a Raspberry
 Pi 4 with a fixed CSI camera, with realtime alerts.
 
-**Problem:** Binary image classification (`salt` vs `clean`) with **very
-limited data** (8 corroded samples + 5 clean battery samples).
+**Problem:** Binary image classification (`salt` vs `clean`) on a small,
+in-house dataset (**74 corroded samples + 173 clean samples**, 247 total).
 
 **Solution:** Few-shot learning with a pretrained MobileNetV2 feature
 extractor combined with a classical HSV color filter to corroborate the
@@ -44,7 +44,7 @@ AI signal. No CNN training from scratch and no TensorFlow / PyTorch at
 inference time.
 
 **Measured results:**
-- Offline accuracy on the dataset: **13/13 = 100 %**
+- Offline accuracy on the dataset (leave-one-out): **≈ 99 %** (F1 = 0.991)
 - Realtime throughput on Pi 4 (640×480 capture): **12.76 FPS**
 
 ---
@@ -92,12 +92,12 @@ through **OpenCV DNN** — no TF / PyTorch dependency.
 ```
 AI-predict-salt-h2/
 ├── dataset/
-│   ├── salt/              # 8 corroded battery images (salt_01.jpg ... salt_08.jpg)
-│   └── clean/             # 5 clean battery images (clean_01.jpg ... clean_05.jpg)
+│   ├── salt/              # 74 corroded battery images (salt_001.jpg ... salt_077.jpg)
+│   └── clean/             # 173 clean battery images (clean_001.jpg ... clean_175.jpg)
 ├── model/
 │   └── mobilenetv2-12.onnx   # ~14 MB, MobileNetV2 pretrained on ImageNet
 ├── snapshots/             # auto-created: frames saved when salt is detected
-├── prototypes.npz         # auto-created by train.py: 13 embedding vectors
+├── prototypes.npz         # auto-created by train.py: 247 embedding vectors (74 + 173)
 ├── detect_salt.py         # FeatureExtractor + SaltDetector (core)
 ├── train.py               # builds prototypes.npz from dataset/
 ├── run_camera.py          # CSI camera loop + UI overlay (GUI / headless)
@@ -370,7 +370,7 @@ In `train.py`, function `augment()`. Each source image yields **5 variants**:
                                                          │
                                                          ▼
                                                   prototypes.npz
-                                              (13 L2-normed vectors)
+                                              (247 L2-normed vectors)
 ```
 
 **Command:** `python3 train.py`
@@ -380,7 +380,7 @@ In `train.py`, function `augment()`. Each source image yields **5 variants**:
 ```
 ┌────────────┐   ┌──────────┐   ┌──────────────┐   ┌─────────────┐
 │ CSI camera │──▶│Picamera2 │──▶│  cv2.dnn     │──▶│  cosine vs  │
-│  (IMX219)  │   │  RGB888  │   │ MobileNetV2  │   │ 13 prototypes│
+│  (IMX219)  │   │  RGB888  │   │ MobileNetV2  │   │247 prototypes│
 └────────────┘   └──────────┘   └──────────────┘   └──────┬──────┘
                                                           │
                        ┌──────────────────────────────────┘

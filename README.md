@@ -88,8 +88,8 @@ Edit `SaltDetector(...)` in `run_camera.py` or in your own script:
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `margin_threshold` | 0.03 | Minimum (salt_sim − clean_sim) to flag salt from AI alone |
-| `cv_threshold` | 0.08 | Minimum HSV salt-mask ratio that on its own raises suspicion |
+| `margin_threshold` | 0.025 | Minimum (salt_sim − clean_sim) to flag salt from AI alone |
+| `cv_threshold` | 0.03 | Minimum HSV salt-mask ratio that on its own raises suspicion |
 | `fusion_weight_ai` | 0.7 | Weight of the AI score when fusing with the CV score |
 
 When you collect more real images on the ship, drop them into the
