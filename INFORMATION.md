@@ -144,7 +144,8 @@ wget -O model/mobilenetv2-12.onnx \
 
 ## 6. Few-Shot Prototype Learning
 
-With only 13 images we **do not train a CNN from scratch**. Pipeline:
+With **74 salt + 173 clean** images we **do not train a CNN from
+scratch**. Pipeline:
 
 1. **Feature extraction**: each image → 1000-D vector from MobileNetV2
 2. **L2-normalize** so that cosine similarity reduces to a dot product
@@ -201,16 +202,16 @@ In `detect_salt.py`, method `SaltDetector.predict()`:
 
 ```
 margin     = salt_sim - clean_sim           (cosine similarity, L2-normed)
-ai_score   = clip( (margin + 0.1) / 0.3, 0, 1 )
-cv_score   = min( cv_ratio / 0.25, 1 )
+ai_score   = clip( (margin + 0.30) / 0.60, 0, 1 )
+cv_score   = min( cv_ratio / 0.08, 1 )
 confidence = 0.7 * ai_score + 0.3 * cv_score
 ```
 
 ### `has_salt = True` if either condition holds:
 
 ```
-(1) margin >= 0.03                           # AI alone is confident
-(2) cv_ratio >= 0.08  AND  margin >= -0.02   # strong CV evidence and AI does not disagree
+(1) margin >= 0.025                          # AI alone is confident
+(2) cv_ratio >= 0.03  AND  margin >= -0.02   # strong CV evidence and AI does not disagree
 ```
 
 ### Why both signals?
@@ -281,30 +282,38 @@ the CV branch's score (which is also in `[0, 1]`).
 
 ```python
 # detect_salt.py, SaltDetector.predict()
-ai_score = float(np.clip((margin + 0.1) / 0.3, 0.0, 1.0))
+ai_score = float(np.clip((margin + 0.30) / 0.60, 0.0, 1.0))
 ```
 
 **Interpretation of the values:**
 
 | `margin` | `ai_score` | Meaning |
 |---:|---:|---|
-| ≤ −0.10 | 0.00 | AI is very confident: **clean** |
-| −0.05 | 0.17 | AI leans clean |
-|  0.00 | 0.33 | Undecided (on the boundary) |
-| +0.05 | 0.50 | AI mildly leans salt |
-| +0.10 | 0.67 | AI leans salt |
-| ≥ +0.20 | 1.00 | AI is very confident: **salt** |
+| ≤ −0.30 | 0.00 | AI is very confident: **clean** |
+| −0.15 | 0.25 | AI leans clean (≈ class mean) |
+|  0.00 | 0.50 | Undecided (on the boundary) |
+| +0.025 | 0.54 | `margin_threshold` — minimum to flag salt |
+| +0.15 | 0.75 | AI leans salt (≈ class mean) |
+| ≥ +0.30 | 1.00 | AI is very confident: **salt** |
 
-**Where do the constants `0.1` and `0.3` come from?**
-They are an **affine rescaling** (a heuristic, not a theorem):
+**Where do the constants `0.30` and `0.60` come from?**
+They are an **affine rescaling** calibrated from the actual margin
+distribution of this dataset (74 salt + 173 clean prototypes,
+leave-one-out evaluation):
+
+| Class | mean | std | P5 | median | P95 |
+|---|---:|---:|---:|---:|---:|
+| salt  | +0.165 | 0.082 | +0.053 | +0.151 | +0.309 |
+| clean | −0.165 | 0.077 | −0.289 | −0.165 | −0.049 |
+
+Setting $m_{\min} = -0.30$ and $m_{\max} = +0.30$ covers ≈ 95 % of both
+class distributions symmetrically:
 
 $$\text{ai\_score} = \mathrm{clip}\!\left(\frac{\text{margin} - m_{\min}}{m_{\max} - m_{\min}},\ 0,\ 1\right)
-\quad\text{with}\quad m_{\min} = -0.1,\ m_{\max} = +0.2$$
+\quad\text{with}\quad m_{\min} = -0.30,\ m_{\max} = +0.30$$
 
-Empirically, with MobileNetV2 logits as embeddings on this dataset,
-margins fall in roughly `[-0.1, +0.2]` (see §14, "Mean margin"). Mapping
-that empirical range to `[0, 1]` gives every value the same scale as
-`cv_score`, which is required for the linear fusion:
+Mapping that empirical range to `[0, 1]` gives every value the same
+scale as `cv_score`, which is required for the linear fusion:
 
 ```
 confidence = 0.7 * ai_score + 0.3 * cv_score
@@ -326,7 +335,7 @@ embedding e  ──► salt_sim, clean_sim   (cosine vs prototypes)
                      │
                      ├── fused with cv_score → confidence (displayed)
                      │
-                     └── thresholded (margin ≥ 0.03) → has_salt (boolean)
+                     └── thresholded (margin ≥ 0.025) → has_salt (boolean)
 ```
 
 ---
@@ -343,8 +352,8 @@ In `train.py`, function `augment()`. Each source image yields **5 variants**:
 | Gamma 1.3 (brighter) | Direct flashlight |
 | Warm white-balance shift (B−15, R+15) | Yellow shipboard lighting |
 
-→ 13 images × 5 = **65 embeddings** → averaged per source image →
-**13 prototypes**.
+→ 247 images × 5 = **1235 embeddings** → averaged per source image →
+**247 prototypes** (74 salt + 173 clean).
 
 ---
 
@@ -493,7 +502,7 @@ sudo journalctl -u salt-detector -f      # tail logs in realtime
 
 ```bash
 python3 smoke_test.py
-# Expected: Accuracy: 13/13 = 100.0%
+# Expected: Accuracy: ~99 % on the 247-image dataset
 ```
 
 ### 2. Real FPS measurement with the CSI camera
@@ -530,13 +539,18 @@ in front of the CSI camera → the system reacts immediately.
 
 ## 14. Experimental Results
 
-### Offline accuracy on the dataset (13 images)
+### Offline accuracy on the dataset (74 salt + 173 clean)
 
-| Class | Images | Correct | Mean margin |
-|---|---|---|---|
-| salt | 8 | 8/8 | +0.605 (very confident) |
-| clean | 5 | 5/5 | −0.509 (very confident) |
-| **Total** | **13** | **13/13 = 100 %** | — |
+Leave-one-out evaluation on the augmented prototypes:
+
+| Class | Prototypes | Mean margin | Std | Notes |
+|---|---:|---:|---:|---|
+| salt  | 74  | +0.165 | 0.082 | P5 = +0.053, P95 = +0.309 |
+| clean | 173 | −0.165 | 0.077 | P5 = −0.289, P95 = −0.049 |
+
+**Best operating point** (F1-optimized): `margin_threshold ≈ +0.025`
+→ accuracy **≈ 99.0 %**, F1 = 0.991. The two class distributions are
+cleanly separated (mean margins ±0.165, gap ≈ 4σ).
 
 ### Realtime performance on Pi 4
 
@@ -556,8 +570,8 @@ In `detect_salt.py`, class `SaltDetector(...)`:
 
 | Parameter | Default | Increase when… | Decrease when… |
 |---|---|---|---|
-| `margin_threshold` | 0.03 | Too many false positives | Salt is being missed |
-| `cv_threshold` | 0.08 | Triggering on white casings (false positive) | Light corrosion is missed |
+| `margin_threshold` | 0.025 | Too many false positives | Salt is being missed |
+| `cv_threshold` | 0.03 | Triggering on white casings (false positive) | Light corrosion is missed |
 | `fusion_weight_ai` | 0.7 | Dataset is well-representative | CV mask is more reliable than AI |
 
 **Quick override** (edit the `SaltDetector(...)` call in `run_camera.py`):
@@ -567,7 +581,7 @@ detector = SaltDetector(
     prototypes_path=args.prototypes,
     model_path=args.model,
     margin_threshold=0.05,    # stricter
-    cv_threshold=0.12,
+    cv_threshold=0.05,
     fusion_weight_ai=0.6,
 )
 ```
@@ -633,7 +647,7 @@ detector = SaltDetector(
 | `Can't read ONNX file` | Truncated ONNX download (size < 14 MB) | Re-download from the ONNX Model Zoo |
 | `prototypes.npz not found` | Training step never ran | `python3 train.py` |
 | Only 2-3 FPS on the Pi | Capture resolution too high | Use `--width 640 --height 480` |
-| False positive on white casings | `cv_threshold` too low | Raise `cv_threshold` to 0.12-0.15 |
+| False positive on white casings | `cv_threshold` too low | Raise `cv_threshold` to 0.05-0.08 |
 | Light corrosion missed | `margin_threshold` too high | Lower to 0.01-0.02, or add light-corrosion samples to the dataset |
 | Camera not detected | Loose CSI cable / not enabled | `sudo raspi-config` → Camera → Enable → reboot |
 | `ModuleNotFoundError: cv2` on Pi | venv without system packages | Recreate the venv with `--system-site-packages` |

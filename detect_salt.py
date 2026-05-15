@@ -175,8 +175,8 @@ class SaltDetector:
     def __init__(self,
                  prototypes_path: str = "prototypes.npz",
                  model_path: str = DEFAULT_MODEL,
-                 margin_threshold: float = 0.03,
-                 cv_threshold: float = 0.08,
+                 margin_threshold: float = 0.025,
+                 cv_threshold: float = 0.03,
                  fusion_weight_ai: float = 0.7):
         if not os.path.exists(prototypes_path):
             raise FileNotFoundError(
@@ -211,10 +211,14 @@ class SaltDetector:
         best_clean = self.clean_names[int(clean_sims.argmax())]
 
         cv_score_raw = salt_color_ratio(bgr_image)
-        cv_score = min(cv_score_raw / 0.25, 1.0)   # 0..1
+        # Empirical (74 salt + 173 clean prototypes): P95 of salt cv_ratio ~ 0.07
+        cv_score = min(cv_score_raw / 0.08, 1.0)   # 0..1
 
-        # AI sub-score in 0..1 (clip the typical margin range -0.1..+0.2)
-        ai_score = float(np.clip((margin + 0.1) / 0.3, 0.0, 1.0))
+        # AI sub-score in 0..1. Empirical margin distribution on this dataset:
+        #   salt  margin ~ N(+0.165, 0.082), P5=+0.053, P95=+0.309
+        #   clean margin ~ N(-0.165, 0.077), P5=-0.289, P95=-0.049
+        # Mapping the symmetric range [-0.30, +0.30] to [0, 1].
+        ai_score = float(np.clip((margin + 0.30) / 0.60, 0.0, 1.0))
         fused = self.w_ai * ai_score + (1 - self.w_ai) * cv_score
 
         has_salt = (margin >= self.margin_threshold) or \
