@@ -169,16 +169,18 @@ class SaltDetector:
     model_path      : MobileNetV2 ONNX file
     margin_threshold : minimum (salt_sim - clean_sim) to flag salt purely
                        from the AI signal
-    cv_threshold : minimum HSV mask ratio that on its own raises suspicion
+    cv_threshold : minimum HSV mask ratio for CV corroboration
+    cv_margin_guard : minimum margin required before CV can corroborate
     fusion_weight_ai : weight of the AI signal in the fused confidence
     """
 
     def __init__(self,
                  prototypes_path: str = "prototypes.npz",
                  model_path: str = DEFAULT_MODEL,
-                 margin_threshold: float = 0.025,
-                 cv_threshold: float = 0.03,
-                 fusion_weight_ai: float = 0.7):
+                 margin_threshold: float = 0.04,
+                 cv_threshold: float = 0.15,
+                 cv_margin_guard: float = 0.02,
+                 fusion_weight_ai: float = 0.9):
         if not os.path.exists(prototypes_path):
             raise FileNotFoundError(
                 f"{prototypes_path} not found. Run: python train.py"
@@ -196,6 +198,7 @@ class SaltDetector:
         self.extractor = FeatureExtractor(model_path)
         self.margin_threshold = margin_threshold
         self.cv_threshold = cv_threshold
+        self.cv_margin_guard = cv_margin_guard
         self.w_ai = fusion_weight_ai
 
     def predict(self, bgr_image: np.ndarray) -> dict:
@@ -212,18 +215,20 @@ class SaltDetector:
         best_clean = self.clean_names[int(clean_sims.argmax())]
 
         cv_score_raw = salt_color_ratio(bgr_image)
-        # Empirical (74 salt + 173 clean prototypes): P95 of salt cv_ratio ~ 0.07
-        cv_score = min(cv_score_raw / 0.08, 1.0)   # 0..1
+        # Empirical (current dataset, readable images):
+        #   salt  cv_ratio P95 ~ 0.58
+        # Using P95 as normalization keeps cv_score in a stable 0..1 range.
+        cv_score = min(cv_score_raw / 0.58, 1.0)   # 0..1
 
-        # AI sub-score in 0..1. Empirical margin distribution on this dataset:
-        #   salt  margin ~ N(+0.165, 0.082), P5=+0.053, P95=+0.309
-        #   clean margin ~ N(-0.165, 0.077), P5=-0.289, P95=-0.049
-        # Mapping the symmetric range [-0.30, +0.30] to [0, 1].
-        ai_score = float(np.clip((margin + 0.30) / 0.60, 0.0, 1.0))
+        # AI sub-score in 0..1. Empirical margins (readable samples):
+        #   salt  P95 ~ +0.52, clean P5 ~ -0.40
+        # Map [-0.40, +0.52] to [0, 1].
+        ai_score = float(np.clip((margin + 0.40) / 0.92, 0.0, 1.0))
         fused = self.w_ai * ai_score + (1 - self.w_ai) * cv_score
 
         has_salt = (margin >= self.margin_threshold) or \
-                   (cv_score_raw >= self.cv_threshold and margin >= -0.02)
+               (cv_score_raw >= self.cv_threshold and
+                margin >= self.cv_margin_guard)
 
         boxes = salt_boxes(bgr_image) if has_salt else []
 
