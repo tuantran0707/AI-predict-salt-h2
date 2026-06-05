@@ -19,6 +19,7 @@ Few-shot pipeline that runs everywhere OpenCV runs (no TensorFlow):
 from __future__ import annotations
 
 import os
+from typing import List, Tuple
 
 import cv2
 import numpy as np
@@ -75,8 +76,8 @@ class FeatureExtractor:
 def save_prototypes(path: str,
                     salt_protos: np.ndarray,
                     clean_protos: np.ndarray,
-                    salt_names: list[str],
-                    clean_names: list[str]) -> None:
+                    salt_names: List[str],
+                    clean_names: List[str]) -> None:
     np.savez(
         path,
         salt_protos=salt_protos,
@@ -135,7 +136,7 @@ def salt_mask(bgr_image: np.ndarray) -> np.ndarray:
 
 def salt_boxes(bgr_image: np.ndarray,
                min_area_ratio: float = 0.002,
-               max_boxes: int = 8) -> list:
+               max_boxes: int = 8) -> List[Tuple[int, int, int, int, float]]:
     """Return bounding boxes around suspected salt regions.
 
     Each box is (x, y, w, h, area_ratio). `area_ratio` is the share of the

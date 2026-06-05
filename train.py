@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import glob
 import os
+from typing import List, Tuple
 
 import cv2
 import numpy as np
@@ -31,14 +32,14 @@ OUT_PATH = "prototypes.npz"
 EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
 
 
-def list_images(folder: str) -> list[str]:
-    paths: list[str] = []
+def list_images(folder: str) -> List[str]:
+    paths: List[str] = []
     for ext in EXTS:
         paths.extend(glob.glob(os.path.join(folder, ext)))
     return sorted(paths)
 
 
-def augment(bgr: np.ndarray) -> list[np.ndarray]:
+def augment(bgr: np.ndarray) -> List[np.ndarray]:
     """Generate a few light variants of the input image."""
     out = [bgr, cv2.flip(bgr, 1)]
 
@@ -58,14 +59,16 @@ def augment(bgr: np.ndarray) -> list[np.ndarray]:
     return out
 
 
-def build_prototypes(folder: str, extractor: FeatureExtractor, label: str):
+def build_prototypes(
+    folder: str, extractor: FeatureExtractor, label: str
+) -> Tuple[np.ndarray, List[str]]:
     paths = list_images(folder)
     if not paths:
         print(f"  [!] No images in '{folder}'.")
         return np.zeros((0, 1000), dtype=np.float32), []
 
-    embeddings: list[np.ndarray] = []
-    names: list[str] = []
+    embeddings: List[np.ndarray] = []
+    names: List[str] = []
     for p in paths:
         img = cv2.imread(p)
         if img is None:
