@@ -89,8 +89,9 @@ Edit `SaltDetector(...)` in `run_camera.py` or in your own script:
 | Parameter | Default | Meaning |
 |---|---|---|
 | `margin_threshold` | 0.025 | Minimum (salt_sim − clean_sim) to flag salt from AI alone |
-| `cv_threshold` | 0.03 | Minimum HSV salt-mask ratio that on its own raises suspicion |
-| `fusion_weight_ai` | 0.7 | Weight of the AI score when fusing with the CV score |
+| `cv_threshold` | 0.03 | Minimum full-frame HSV salt-mask ratio in fallback mode |
+| `pole_cv_threshold` | 0.10 | Minimum terminal-head HSV ratio in pole mode (`--pole-threshold`) |
+| `fusion_weight_ai` | 0.72 | Weight of the AI score when fusing with the CV score |
 
 When you collect more real images on the ship, drop them into the
 appropriate `dataset/salt/` or `dataset/clean/` folder and rerun
@@ -100,6 +101,16 @@ appropriate `dataset/salt/` or `dataset/clean/` folder and rerun
 
 - `q` — quit
 - `s` — save a snapshot to `snapshots/`
+
+## ThingsBoard trigger mode (on-demand detect)
+
+When running with `--tb-token`, the service stays in LIVE stream mode and
+only runs detection when shared attribute `detect_salt=true` is received.
+
+- Trigger supports repeated scans (not only the first time).
+- Result overlay with L/R confidence (%) is shown for about 4 seconds, then
+  UI returns to clean LIVE mode.
+- Telemetry and snapshot image are published after each scan.
 
 ## Headless mode
 

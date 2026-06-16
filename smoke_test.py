@@ -6,12 +6,15 @@ import os
 from detect_salt import SaltDetector
 
 d = SaltDetector()
-groups = [("salt", sorted(glob.glob("dataset/salt/*.jpg"))),
-          ("clean", sorted(glob.glob("dataset/clean/*.jpg")))]
+groups = [("salt", sorted(glob.glob("dataset/salt/*"))),
+          ("clean", sorted(glob.glob("dataset/clean/*")))]
 correct = total = 0
 for label, paths in groups:
     for p in paths:
-        r = d.predict(cv2.imread(p))
+        img = cv2.imread(p)
+        if img is None:
+            continue
+        r = d.predict(img)
         ok = (label == "salt") == r["has_salt"]
         correct += ok
         total += 1

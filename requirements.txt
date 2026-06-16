@@ -8,3 +8,4 @@
 
 numpy>=1.23
 opencv-python>=4.8       # On Pi: skip and rely on apt python3-opencv
+paho-mqtt>=2.0

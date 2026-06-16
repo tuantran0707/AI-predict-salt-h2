@@ -15,8 +15,7 @@ time.sleep(1)
 n = 0
 t0 = time.time()
 while time.time() - t0 < 8:
-    rgb = p.capture_array()
-    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    bgr = p.capture_array()  # RGB888 on Pi CSI is already BGR for OpenCV
     r = d.predict(bgr)
     n += 1
     if n % 5 == 0:
